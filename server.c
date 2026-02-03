@@ -110,7 +110,7 @@ void run_game_logic_process(int semid, GameSharedMemory *shm) {
     while (1) {
         sem_p(semid);
         
-        // Obsługa zamykania gry (automatyczne wyłączenie po 10s od końca)
+        // Obsługa zamykania gry (automatyczne wyłączenie po 5s)
         if (shm->players[0].game_over && !shm->game_active) {
             static int ticks = 0;
             if (++ticks >= 10) { // Co ok 1s
