@@ -88,8 +88,9 @@ void resolve_combat(GameSharedMemory *shm, int defender_id) {
     
     for(int i=0; i<3; i++) {
         int loss = (int)(att_units[i] * loss_ratio);
-        int *player_units = &shm->players[attacker_id].units[i];
-        *player_units = (*player_units > loss) ? *player_units - loss : 0;
+        int surviving = att_units[i] - loss;
+        if (surviving < 0) surviving = 0;
+        shm->players[attacker_id].units[i] += surviving;
     }
 
     shm->players[defender_id].incoming_attack.active = 0;
@@ -209,6 +210,10 @@ void handle_client_action(GameSharedMemory *shm, Message *msg) {
             shm->players[def_id].incoming_attack.time_left = 5;
             memcpy(shm->players[def_id].incoming_attack.units, u, sizeof(u));
             
+            shm->players[p_id].units[0] -= u[0];
+            shm->players[p_id].units[1] -= u[1];
+            shm->players[p_id].units[2] -= u[2];
+
             sprintf(shm->players[p_id].last_event, "Atak wyslany (5s)");
             shm->players[p_id].last_event_timer = 5;
             sprintf(shm->players[def_id].last_event, "ALARM! Nadchodzi atak!");
