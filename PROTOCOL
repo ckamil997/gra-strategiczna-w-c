@@ -1,0 +1,77 @@
+PROJEKT: GRA STRATEGICZNA (PSIW)
+
+1. MECHANIZMY IPC
+-----------------
+W projekcie wykorzystano mechanizmy System V IPC:
+- Kolejki Komunikatów (Message Queues) - do komunikacji Klient <-> Serwer.
+- Pamięć Współdzielona (Shared Memory) - do przechowywania stanu gry w serwerze oraz lokalnie w kliencie (między procesami).
+- Semafory (Semaphores) - do synchronizacji dostępu do pamięci współdzielonej w serwerze.
+
+2. KLUCZE IPC (zdefiniowane w common.h)
+---------------------------------------
+- KEY_MSG: 1234  (Kolejka komunikatów)
+- KEY_SHM: 5678  (Pamięć współdzielona gry)
+- KEY_SEM: 9012  (Semafor dostępu)
+
+3. STRUKTURA PAMIĘCI WSPÓŁDZIELONEJ (GameSharedMemory)
+------------------------------------------------------
+Pamięć zawiera tablicę struktur `PlayerState` dla 2 graczy oraz flagę `game_active`.
+
+Struktura `PlayerState`:
+- pid:              PID procesu klienta.
+- resources:        Aktualna ilość surowców.
+- units[4]:         Tablica jednostek (0:Lekka, 1:Ciezka, 2:Jazda, 3:Robotnicy).
+- points:           Punkty zwycięstwa.
+- production_queue: Tablica zadań produkcyjnych (typ, ilość, czas).
+- incoming_attack:  Struktura ataku nadchodzącego na gracza (timer 5s).
+- last_event:       Ostatni komunikat tekstowy dla gracza (np. wynik bitwy).
+- last_event_timer: Czas wyświetlania komunikatu.
+- game_over:        Flaga końca gry dla danego gracza.
+
+4. PROTOKÓŁ KOMUNIKACJI (Kolejka Komunikatów)
+---------------------------------------------
+Struktura wiadomości (`Message`):
+- long mtype;       // Typ komunikatu (adresat/typ akcji)
+- int player_id;    // ID nadawcy (dla MSG_ACTION) lub odbiorcy (w treści)
+- int action_type;  // Rodzaj akcji (ACTION_BUILD / ACTION_ATTACK)
+- int data[5];      // Dane akcji (typ jednostki, ilość itp.)
+- PlayerState state_copy; // Kopia stanu gry (dla MSG_STATE)
+
+Typy komunikatów (`mtype`):
+A) Logowanie:
+   - Klient -> Serwer (mtype = MSG_LOGIN [1])
+     Wysyła swój PID.
+   - Serwer -> Klient (mtype = PID_KLIENTA)
+     Odsyła przydzielone ID w grze (0 lub 1).
+
+B) Akcje Klienta:
+   - Klient -> Serwer (mtype = MSG_ACTION [2])
+     `action_type` = ACTION_BUILD (1):
+        data[0] = typ jednostki
+        data[1] = ilość
+     `action_type` = ACTION_ATTACK (2):
+        data[0] = ilość lekkiej
+        data[1] = ilość ciężkiej
+        data[2] = ilość jazdy
+
+C) Aktualizacja Stanu:
+   - Serwer -> Klient (mtype = MSG_STATE [20] + ID_GRACZA)
+     Serwer cyklicznie (5 razy na sekundę) wysyła kopię `PlayerState` do każdego klienta.
+     Klient wyświetla te dane w terminalu.
+
+5. LOGIKA GRY (SERWER)
+----------------------
+- Proces Główny (Rodzic): Obsługuje kolejkę komunikatów (odbiera MSG_LOGIN, MSG_ACTION), weryfikuje poprawność akcji i modyfikuje stan w pamięci współdzielonej.
+- Proces Potomny (Dziecko): Odpowiada za upływ czasu.
+  - Cyklicznie (co 1s) nalicza surowce (50 + 5*robotnik).
+  - Przetwarza kolejkę produkcji (zmniejsza czas budowy).
+  - Obsługuje timer ataku (po 5s wywołuje funkcję `resolve_combat`).
+  - Czyści stare komunikaty (last_event_timer).
+
+6. KLIENT
+---------
+Klient składa się z dwóch procesów:
+- Proces wyświetlania (Dziecko): Odbiera MSG_STATE i rysuje interfejs (TUI) przy użyciu kodów sterujących terminala.
+- Proces wejścia (Rodzic): Czyta klawiaturę w trybie niekanonicznym.
+  - Obsługuje komendy: 'b' (buduj), 'a' (atakuj), 'q' (wyjście).
+  - Weryfikuje lokalnie koszt budowy przed wysłaniem żądania do serwera (używając małego segmentu pamięci współdzielonej IPC_PRIVATE do synchronizacji stanu zasobów z procesem wyświetlania).

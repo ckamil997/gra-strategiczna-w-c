@@ -1,0 +1,100 @@
+GRA STRATEGICZNA - PROJEKT ZALICZENIOWY PSIW
+=================================================
+
+AUTOR: Kamil Ćwikliński
+DATA:  Styczeń 2026
+
+OPIS PROJEKTU:
+--------------
+Prosta gra strategiczna czasu rzeczywistego (RTS) działająca w terminalu Linux,
+oparta na architekturze Klient-Serwer przy użyciu mechanizmów IPC.
+Dwóch graczy rywalizuje o zasoby, produkuje jednostki i atakuje przeciwnika,
+aby zdobyć 5 punktów zwycięstwa.
+
+WYMAGANIA:
+----------
+- System operacyjny Linux
+- Kompilator GCC
+- Biblioteki standardowe C (sys/ipc, sys/msg, sys/shm, sys/sem)
+
+INSTRUKCJA KOMPILACJI:
+----------------------
+Aby skompilować projekt, wpisz w terminalu:
+    make
+
+Polecenie to utworzy dwa pliki wykonywalne: `server` oraz `client`.
+
+Aby wyczyścić projekt (usunąć binaria):
+    make clean
+
+INSTRUKCJA URUCHOMIENIA:
+------------------------
+1. Uruchom serwer w pierwszym oknie terminala:
+    ./server
+   (Serwer zainicjuje mechanizmy IPC i będzie oczekiwał na graczy).
+
+2. Uruchom pierwszego klienta w drugim oknie:
+    ./client
+   (Pojawi się informacja o oczekiwaniu na drugiego gracza).
+
+3. Uruchom drugiego klienta w trzecim oknie:
+    ./client
+   (Gra rozpocznie się automatycznie po dołączeniu obu graczy).
+
+STEROWANIE I KOMENDY:
+---------------------
+Interfejs klienta obsługiwany jest tekstowo.
+Wpisz komendę i zatwierdź Enterem.
+
+1. BUDOWANIE JEDNOSTEK:
+   Składnia: b <typ> <ilość>
+   Typy jednostek:
+     0 - Lekka Piechota  (Koszt: 100)
+     1 - Ciężka Piechota (Koszt: 250)
+     2 - Jazda           (Koszt: 550)
+     3 - Robotnik        (Koszt: 150) - zwiększa przychód surowców
+   
+   Przykład:
+     b 0 5   (Zleć budowę 5 jednostek lekkiej piechoty)
+     b 3 1   (Zleć budowę 1 robotnika)
+
+2. ATAKOWANIE:
+   Składnia: a <lekka> <ciężka> <jazda>
+   Wysyła podaną liczbę jednostek do ataku na przeciwnika.
+   
+   Przykład:
+     a 10 5 0  (Wyślij 10 lekkich i 5 ciężkich jednostek)
+
+3. WYJŚCIE Z GRY:
+   Naciśnij klawisz 'q', aby bezpiecznie zamknąć klienta.
+
+ZASADY GRY:
+-----------
+1. SUROWCE:
+   - Każdy gracz startuje z zasobem 300 jednostek.
+   - Bazowy przychód to 50/s.
+   - Każdy robotnik zwiększa przychód o 5/s.
+
+2. PRODUKCJA:
+   - Jednostki produkowane są w kolejce (jeden slot na raz).
+   - Czas produkcji zależy od typu jednostki (2s-5s).
+
+3. WALKA:
+   - Atak podróżuje 5 sekund. Obrońca otrzymuje ostrzeżenie.
+   - Bitwa rozstrzygana jest symultanicznie (obie strony zadają obrażenia jednocześnie).
+   - Siła ataku zależy od sumy ataku wysłanych jednostek.
+   - Siła obrony zależy od sumy obrony WSZYSTKICH jednostek w bazie obrońcy.
+   - Jeśli Atak > Obrona -> Atakujący wygrywa, niszczy armię wroga i zdobywa 1 PUNKT.
+   - Jeśli Atak <= Obrona -> Atak zostaje odparty, obie strony ponoszą straty proporcjonalne do przewagi wroga.
+
+4. KONIEC GRY:
+   - Gra kończy się, gdy jeden z graczy zdobędzie 5 punktów.
+   - Wyświetlane są komunikaty o wygranej/przegranej.
+
+UWAGI TECHNICZNE:
+-----------------
+W przypadku nieoczekiwanego przerwania działania serwera (np. CTRL+C),
+zasoby IPC mogą pozostać w systemie. Użyj polecenia `ipcrm` lub zrestartuj serwer,
+który przy starcie próbuje wyczyścić stare kolejki.
+
+Plik PROTOCOL.txt zawiera szczegółowy opis struktur danych i komunikacji.
