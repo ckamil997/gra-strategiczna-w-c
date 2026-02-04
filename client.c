@@ -1,8 +1,5 @@
 #include <unistd.h>
 #include <stdlib.h>
-#include <sys/ipc.h>
-#include <sys/msg.h>
-#include <sys/shm.h>
 #include <string.h>
 #include <signal.h>
 #include <stdio.h> 
@@ -38,44 +35,45 @@ void print_temp(const char *str) {
 }
 
 // Proces odpowiedzialny za wyświetlanie stanu gry (odbiera MSG_STATE)
-void run_display_process(int msgid, int my_id, int *shared_resources) {
-    Message state_msg;
+void run_display_process(int message_queue_id, int player_index, int *local_resources_ptr) {
+    Message state_message;
     char out_buf[4096];
+    size_t msg_size = sizeof(Message) - sizeof(long);
     
     while(1) {
         // Odbior wiadomości ze stanem gry przeznaczonej dla tego gracza
-        if (msgrcv(msgid, &state_msg, sizeof(Message) - sizeof(long), MSG_STATE + my_id, 0) != -1) {
-            *shared_resources = state_msg.state_copy.resources; // Aktualizacja zasobów dla procesu wejścia
+        if (receive_message(message_queue_id, &state_message, msg_size, MSG_STATE + player_index, 0) != -1) {
+            *local_resources_ptr = state_message.state_copy.resources; // Aktualizacja zasobów dla procesu wejścia
 
             int len = 0;
             // Budowanie bufora wyjściowego (podwójne buforowanie dla uniknięcia migotania)
             len += sprintf(out_buf + len, ANSI_SAVE ANSI_HOME "=== GRA STRATEGICZNA ===" ANSI_CL_NL);
-            int income = 50 + (state_msg.state_copy.units[UNIT_WORKER] * 5);
-            len += sprintf(out_buf + len, "Surowce:   %d (+%d/s)" ANSI_CL_NL, state_msg.state_copy.resources, income);
-            len += sprintf(out_buf + len, "Punkty:    %d/5" ANSI_CL_NL, state_msg.state_copy.points);
+            int income = 50 + (state_message.state_copy.units[UNIT_WORKER] * 5);
+            len += sprintf(out_buf + len, "Surowce:   %d (+%d/s)" ANSI_CL_NL, state_message.state_copy.resources, income);
+            len += sprintf(out_buf + len, "Punkty:    %d/5" ANSI_CL_NL, state_message.state_copy.points);
             
-            if (state_msg.state_copy.incoming_attack.active) {
-                len += sprintf(out_buf + len, ANSI_RED "!!! ALARM: ZOSTALES ZAATAKOWANY - %ds !!!" ANSI_RESET ANSI_CL_NL, state_msg.state_copy.incoming_attack.time_left);
+            if (state_message.state_copy.incoming_attack.active) {
+                len += sprintf(out_buf + len, ANSI_RED "!!! ALARM: ZOSTALES ZAATAKOWANY - %ds !!!" ANSI_RESET ANSI_CL_NL, state_message.state_copy.incoming_attack.time_left);
             } else len += sprintf(out_buf + len, ANSI_CL_NL);
             
-            if (strlen(state_msg.state_copy.last_event) > 0) {
-                 len += sprintf(out_buf + len, "KOMUNIKAT: %s" ANSI_CL_NL, state_msg.state_copy.last_event);
+            if (strlen(state_message.state_copy.last_event) > 0) {
+                 len += sprintf(out_buf + len, "KOMUNIKAT: %s" ANSI_CL_NL, state_message.state_copy.last_event);
             } else len += sprintf(out_buf + len, ANSI_CL_NL);
 
             len += sprintf(out_buf + len, "--------------------------" ANSI_CL_NL);
 
-            if (state_msg.state_copy.game_over) {
+            if (state_message.state_copy.game_over) {
                 len += sprintf(out_buf + len, "\n" ANSI_YELLOW "*** KONIEC GRY ***" ANSI_RESET ANSI_CL_NL);
-                if (state_msg.state_copy.shutdown_timer > 0) {
-                    len += sprintf(out_buf + len, "Zamkniecie za: %d s" ANSI_CL_NL, state_msg.state_copy.shutdown_timer);
+                if (state_message.state_copy.shutdown_timer > 0) {
+                    len += sprintf(out_buf + len, "Zamkniecie za: %d s" ANSI_CL_NL, state_message.state_copy.shutdown_timer);
                 } else len += sprintf(out_buf + len, "Zamykanie..." ANSI_CL_NL);
             }
             
             len += sprintf(out_buf + len, "Jednostki:" ANSI_CL_NL);
-            len += sprintf(out_buf + len, " [0] Lekka piechota:      %d (K:100 A:1.0 D:1.2)" ANSI_CL_NL, state_msg.state_copy.units[UNIT_LIGHT]);
-            len += sprintf(out_buf + len, " [1] Ciezka piechota:     %d (K:250 A:1.5 D:3.0)" ANSI_CL_NL, state_msg.state_copy.units[UNIT_HEAVY]);
-            len += sprintf(out_buf + len, " [2] Jazda:               %d (K:550 A:3.5 D:1.2)" ANSI_CL_NL, state_msg.state_copy.units[UNIT_CAVALRY]);
-            len += sprintf(out_buf + len, " [3] Robotnicy:           %d (K:150 Prod: +5/s)" ANSI_CL_NL, state_msg.state_copy.units[UNIT_WORKER]);
+            len += sprintf(out_buf + len, " [0] Lekka piechota:      %d (K:100 A:1.0 D:1.2)" ANSI_CL_NL, state_message.state_copy.units[UNIT_LIGHT]);
+            len += sprintf(out_buf + len, " [1] Ciezka piechota:     %d (K:250 A:1.5 D:3.0)" ANSI_CL_NL, state_message.state_copy.units[UNIT_HEAVY]);
+            len += sprintf(out_buf + len, " [2] Jazda:               %d (K:550 A:3.5 D:1.2)" ANSI_CL_NL, state_message.state_copy.units[UNIT_CAVALRY]);
+            len += sprintf(out_buf + len, " [3] Robotnicy:           %d (K:150 Prod: +5/s)" ANSI_CL_NL, state_message.state_copy.units[UNIT_WORKER]);
             len += sprintf(out_buf + len, "--------------------------" ANSI_CL_NL);
             len += sprintf(out_buf + len, "KOMENDY:" ANSI_CL_NL);
             len += sprintf(out_buf + len, "b <typ> <ilosc>" ANSI_CL_NL);
@@ -83,18 +81,18 @@ void run_display_process(int msgid, int my_id, int *shared_resources) {
             len += sprintf(out_buf + len, "q - wyjscie" ANSI_CL_NL);
             len += sprintf(out_buf + len, "--------------------------" ANSI_CL_NL "PRODUKCJA:" ANSI_CL_NL);
             
-            for(int i=0; i<QUEUE_SIZE; i++) {
-                if(state_msg.state_copy.production_queue[i].active) {
+            for(int queue_index = 0; queue_index < QUEUE_SIZE; queue_index++) {
+                if(state_message.state_copy.production_queue[queue_index].active) {
                      len += sprintf(out_buf + len, " Slot %d: Typ %d (x%d) - %ds" ANSI_CL_NL, 
-                                    i, state_msg.state_copy.production_queue[i].unit_type,
-                                    state_msg.state_copy.production_queue[i].count,
-                                    state_msg.state_copy.production_queue[i].time_left);
+                                    queue_index, state_message.state_copy.production_queue[queue_index].unit_type,
+                                    state_message.state_copy.production_queue[queue_index].count,
+                                    state_message.state_copy.production_queue[queue_index].time_left);
                 } else len += sprintf(out_buf + len, ANSI_CL_NL);
             }
             len += sprintf(out_buf + len, ANSI_RESTORE);
             write(1, out_buf, len);
 
-            if (state_msg.state_copy.game_over && state_msg.state_copy.shutdown_timer <= 0) {
+            if (state_message.state_copy.game_over && state_message.state_copy.shutdown_timer <= 0) {
                  break;
             }
         } else break;
@@ -102,103 +100,105 @@ void run_display_process(int msgid, int my_id, int *shared_resources) {
     
     system("stty icanon echo");
     kill(getppid(), SIGTERM);
-    shmdt(shared_resources);
+    detach_shared_memory(local_resources_ptr);
     exit(0);
 }
 
 // Proces wejścia - czyta klawisze i wysyła komendy do serwera
-void run_input_process(int msgid, int my_id, int *shared_resources, int child_pid, int shm_res_id) {
+void run_input_process(int message_queue_id, int player_index, int *local_resources_ptr, int child_pid, int local_shared_memory_id) {
     char buffer[128];
     int buf_pos = 0;
-    
+    Message action_message = {.mtype = MSG_ACTION, .player_id = player_index};
+    size_t msg_size = sizeof(Message) - sizeof(long);
+
     // Konfiguracja terminala: tryb niekanoniczny (czytanie znak po znaku) i bez echa
     system("stty -icanon -echo");
     my_print("\033[30;1H> ");
     
     while(1) {
-        char c;
-        if (read(0, &c, 1) > 0) {
-            if (c == 'q') {
+        char input_char;
+        if (read(0, &input_char, 1) > 0) {
+            if (input_char == 'q') {
                 system("stty icanon echo");
                 kill(child_pid, SIGTERM);
-                shmdt(shared_resources);
-                shmctl(shm_res_id, IPC_RMID, NULL);
+                detach_shared_memory(local_resources_ptr);
+                remove_shared_memory(local_shared_memory_id);
                 exit(0);
             }
-            if (c == '\n') {
+            if (input_char == '\n') {
                 // Zatwierdzenie komendy
                 buffer[buf_pos] = '\0';
                 buf_pos = 0;
                 write(1, "\r\033[K", 4);
                 
                 // Parsowanie i Walidacja
-                char *cmd = strtok(buffer, " ");
-                if (cmd != NULL) {
-                    Message action_msg = {.mtype = MSG_ACTION, .player_id = my_id};
+                char *command = strtok(buffer, " ");
+                if (command != NULL) {
                     int valid = 0;
+                    action_message.player_id = player_index; // Refresh just in case
 
-                    if (strcmp(cmd, "b") == 0) {
+                    if (strcmp(command, "b") == 0) {
                         // Komenda buduj: b <typ> <ilosc>
-                        char *t = strtok(NULL, " ");
-                        char *n = strtok(NULL, " ");
-                        if (t && n) {
-                            int type = my_atoi(t);
-                            int count = my_atoi(n);
-                            if (type >= 0 && type <= 3 && (*shared_resources >= UNIT_COST[type] * count)) {
-                                action_msg.action_type = ACTION_BUILD;
-                                action_msg.data[0] = type; action_msg.data[1] = count;
+                        char *type_str = strtok(NULL, " ");
+                        char *count_str = strtok(NULL, " ");
+                        if (type_str && count_str) {
+                            int type = my_atoi(type_str);
+                            int count = my_atoi(count_str);
+                            if (type >= 0 && type <= 3 && (*local_resources_ptr >= UNIT_COST[type] * count)) {
+                                action_message.action_type = ACTION_BUILD;
+                                action_message.data[0] = type; action_message.data[1] = count;
                                 valid = 1;
                             } else print_temp("Blad (typ/koszt)\n");
                         }
                     } 
-                    else if (strcmp(cmd, "a") == 0) {
+                    else if (strcmp(command, "a") == 0) {
                         // Komenda atakuj: a <l> <c> <j>
-                        char *u1 = strtok(NULL, " "), *u2 = strtok(NULL, " "), *u3 = strtok(NULL, " ");
-                        if (u1 && u2 && u3) {
-                            action_msg.action_type = ACTION_ATTACK;
-                            action_msg.data[0] = my_atoi(u1); action_msg.data[1] = my_atoi(u2); action_msg.data[2] = my_atoi(u3);
+                        char *unit1_str = strtok(NULL, " "), *unit2_str = strtok(NULL, " "), *unit3_str = strtok(NULL, " ");
+                        if (unit1_str && unit2_str && unit3_str) {
+                            action_message.action_type = ACTION_ATTACK;
+                            action_message.data[0] = my_atoi(unit1_str); action_message.data[1] = my_atoi(unit2_str); action_message.data[2] = my_atoi(unit3_str);
                             valid = 1;
                         } else print_temp("Uzycie: a <l> <h> <c>\n");
                     }
 
-                    if (valid) msgsnd(msgid, &action_msg, sizeof(Message) - sizeof(long), 0);
+                    if (valid) send_message(message_queue_id, &action_message, msg_size, 0);
                 }
                 my_print("> ");
             }
-            else if (c == 127 || c == 8) {
+            else if (input_char == 127 || input_char == 8) {
                 // Obsługa Backspace
                 if (buf_pos > 0) { buf_pos--; write(1, "\b \b", 3); }
             }
             else if (buf_pos < 127) {
-                buffer[buf_pos++] = c; write(1, &c, 1);
+                buffer[buf_pos++] = input_char; write(1, &input_char, 1);
             }
         }
     }
 }
 
 int main() {
-    int msgid = msgget(KEY_MSG, 0666);
-    if (msgid == -1) { my_print("Blad kolejki\n"); exit(1); }
+    int message_queue_id = get_message_queue_id(KEY_MSG, 0666);
+    if (message_queue_id == -1) { my_print("Blad kolejki\n"); exit(1); }
 
     my_print("Logowanie...\n");
     int my_pid = getpid();
     Message login_msg = {.mtype = MSG_LOGIN, .player_id = my_pid};
-    msgsnd(msgid, &login_msg, sizeof(Message) - sizeof(long), 0);
+    send_message(message_queue_id, &login_msg, sizeof(Message) - sizeof(long), 0);
 
     Message response_msg;
-    msgrcv(msgid, &response_msg, sizeof(Message) - sizeof(long), my_pid, 0);
-    int my_id = response_msg.player_id;
+    receive_message(message_queue_id, &response_msg, sizeof(Message) - sizeof(long), my_pid, 0);
+    int player_index = response_msg.player_id;
     my_print("Zalogowano!\n");
     
     my_print(ANSI_CLEAR);
 
-    int shm_res_id = shmget(IPC_PRIVATE, sizeof(int), IPC_CREAT | 0666);
-    int *shared_resources = (int *)shmat(shm_res_id, NULL, 0);
-    *shared_resources = 0;
+    int local_shared_memory_id = get_shared_memory_id(IPC_PRIVATE, sizeof(int), IPC_CREAT | 0666);
+    int *local_resources_ptr = (int *)attach_shared_memory(local_shared_memory_id, 0);
+    *local_resources_ptr = 0;
 
     int child_pid = fork();
-    if (child_pid == 0) run_display_process(msgid, my_id, shared_resources);
-    else run_input_process(msgid, my_id, shared_resources, child_pid, shm_res_id);
+    if (child_pid == 0) run_display_process(message_queue_id, player_index, local_resources_ptr);
+    else run_input_process(message_queue_id, player_index, local_resources_ptr, child_pid, local_shared_memory_id);
 
     return 0;
 }

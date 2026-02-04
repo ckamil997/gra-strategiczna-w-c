@@ -2,6 +2,14 @@
 #define COMMON_H
 
 #include <sys/types.h>
+#include <sys/ipc.h>
+#include <sys/msg.h>
+#include <sys/shm.h>
+#include <sys/sem.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 // Klucze IPC 
 #define KEY_MSG 1234
@@ -27,50 +35,79 @@
 #define ACTION_BUILD 1
 #define ACTION_ATTACK 2
 
-// Pojedyncze zadanie w kolejce produkcji 
+// --- STRUKTURY ---
+
 typedef struct {
-    int active;      // 1 jeśli slot zajęty, 0 jeśli wolny
-    int unit_type;   // Typ jednostki (0-3)
-    int count;       // Ilość sztuk
-    int time_left;   // Pozostały czas w sekundach
+    int active, unit_type, count, time_left;
 } ProductionTask;
 
-// Struktura ataku 
 typedef struct {
-    int active;         
-    int attacker_id;
-    int defender_id;
-    int units[3];    // [0]=Lekka, [1]=Ciezka, [2]=Jazda 
-    int time_left;
+    int active, attacker_id, defender_id, units[3], time_left;
 } AttackTask;
 
 // Stan gracza (przesyłany do klienta do wyświetlenia) 
 typedef struct {
-    int pid;                // PID procesu (0 = brak gracza)
-    int resources;          // Surowce
-    int units[4];           // Ilość posiadanych jednostek
-    int points;             // Punkty zwycięstwa
-    ProductionTask production_queue[QUEUE_SIZE]; // Kolejka produkcji
-    AttackTask incoming_attack; // Nadchodzący atak na tego gracza (tylko 1 na raz dla uproszczenia)
-    char last_event[128];   // Ostatnie zdarzenie (komunikat)
-    int last_event_timer;   // Czas wygasniecia komunikatu
-    int game_over;          // Flaga końca gry (0=gra, 1=koniec)
-    int shutdown_timer;     // Czas do automatycznego zamknięcia (0=brak odliczania)
+    int pid, resources, units[4], points;
+    ProductionTask production_queue[QUEUE_SIZE];
+    AttackTask incoming_attack;
+    char last_event[128];
+    int last_event_timer, game_over, shutdown_timer;
 } PlayerState;
 
-// Główna struktura Pamięci Współdzielonej (Serwer) 
 typedef struct {
     PlayerState players[MAX_PLAYERS];
     int game_active;
 } GameSharedMemory;
 
-// Struktura wiadomości w kolejce (Message Queue) 
 typedef struct {
-    long mtype;             // Typ komunikatu
-    int player_id;          // ID gracza
-    int action_type;        // ACTION_BUILD lub ACTION_ATTACK
-    int data[5];            // Argumenty: data[0]..data[4] 
-    PlayerState state_copy; // Kopia stanu do wyświetlenia (używane przy MSG_STATE)
+    long mtype;
+    int player_id, action_type, data[5];
+    PlayerState state_copy;
 } Message;
+
+// --- FUNKCJE IPC ---
+
+// Helper do sprawdzania błędów przy pobieraniu ID (dla shm, msg, sem)
+static inline int sys_check(int res, int flags, const char *msg) {
+    if (res == -1 && (flags & IPC_CREAT)) { perror(msg); exit(1); }
+    return res;
+}
+
+// 1. Kolejki
+static inline int get_message_queue_id(key_t k, int f) { return sys_check(msgget(k, f), f, "msgget"); }
+static inline void remove_message_queue(int id) { msgctl(id, IPC_RMID, NULL); }
+
+static inline void send_message(int id, void *msg, size_t sz, int f) {
+    if (msgsnd(id, msg, sz, f) == -1 && !(f & IPC_NOWAIT)) perror("msgsnd");
+}
+
+static inline int receive_message(int id, void *msg, size_t sz, long type, int f) {
+    return msgrcv(id, msg, sz, type, f);
+}
+
+// 2. Pamięć
+static inline int get_shared_memory_id(key_t k, size_t s, int f) { return sys_check(shmget(k, s, f), f, "shmget"); }
+static inline void remove_shared_memory(int id) { shmctl(id, IPC_RMID, NULL); }
+
+static inline void *attach_shared_memory(int id, int f) {
+    void *ptr = shmat(id, NULL, f);
+    if (ptr == (void *)-1) { perror("shmat"); exit(1); }
+    return ptr;
+}
+static inline void detach_shared_memory(const void *addr) { shmdt(addr); }
+
+// 3. Semafory
+static inline int get_semaphore_id(key_t k, int n, int f) { return sys_check(semget(k, n, f), f, "semget"); }
+static inline void remove_semaphore(int id) { semctl(id, 0, IPC_RMID, NULL); }
+static inline void initialize_semaphore(int id, int num, int val) { semctl(id, num, SETVAL, val); }
+
+static inline void semaphore_op(int id, int op) {
+    struct sembuf b = {0, op, 0};
+    if (semop(id, &b, 1) == -1) perror("semop");
+}
+
+// Makra dla czytelności
+#define semaphore_lock(id) semaphore_op(id, -1)
+#define semaphore_unlock(id) semaphore_op(id, 1)
 
 #endif

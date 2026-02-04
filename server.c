@@ -1,9 +1,5 @@
 #include <unistd.h>
 #include <stdlib.h>
-#include <sys/ipc.h>
-#include <sys/msg.h>
-#include <sys/shm.h>
-#include <sys/sem.h>
 #include <string.h>
 #include <errno.h>
 #include <signal.h>
@@ -27,13 +23,6 @@ void my_print_int(int num) {
     write(1, buf, strlen(buf));
 }
 
-void sem_op(int semid, int op) {
-    struct sembuf buf = {0, op, 0};
-    if (semop(semid, &buf, 1) == -1) my_print("Blad Sem\n");
-}
-#define sem_p(id) sem_op(id, -1)
-#define sem_v(id) sem_op(id, 1)
-
 // --- LOGIKA GRY ---
 
 // Funkcja pomocnicza do obliczania siły ataku/obrony
@@ -44,126 +33,126 @@ float calculate_strength(int *units, const float *multipliers, int count) {
 }
 
 // Funkcja odpowiedzialna za rozstrzyganie walki
-void resolve_combat(GameSharedMemory *shm, int defender_id) {
-    if (!shm->players[defender_id].incoming_attack.active) return;
+void resolve_combat(GameSharedMemory *shared_game_state, int defender_id) {
+    if (!shared_game_state->players[defender_id].incoming_attack.active) return;
     
-    int attacker_id = shm->players[defender_id].incoming_attack.attacker_id;
-    int *att_units = shm->players[defender_id].incoming_attack.units; 
+    int attacker_id = shared_game_state->players[defender_id].incoming_attack.attacker_id;
+    int *attacking_units = shared_game_state->players[defender_id].incoming_attack.units; 
     
     // Oblicz siły
-    float SA = calculate_strength(att_units, UNIT_ATTACK, 3);
-    float SB = calculate_strength(shm->players[defender_id].units, UNIT_DEFENSE, 4);
-    if (SB < 0.1) SB = 0.1;
+    float attack_strength = calculate_strength(attacking_units, UNIT_ATTACK, 3);
+    float defense_strength = calculate_strength(shared_game_state->players[defender_id].units, UNIT_DEFENSE, 4);
+    if (defense_strength < 0.1) defense_strength = 0.1;
 
-    float SB_attack_power = calculate_strength(shm->players[defender_id].units, UNIT_ATTACK, 4);
+    float defender_attack_power = calculate_strength(shared_game_state->players[defender_id].units, UNIT_ATTACK, 4);
 
     // Rozstrzygniecie bitwy
-    if (SA > SB) {
+    if (attack_strength > defense_strength) {
         // Atakujący wygrywa
-        for (int i = 0; i < 4; i++) shm->players[defender_id].units[i] = 0;
-        shm->players[attacker_id].points++;
-        shm->players[defender_id].game_over = (shm->players[attacker_id].points >= 5);
-        shm->players[attacker_id].game_over = (shm->players[attacker_id].points >= 5);
+        for (int i = 0; i < 4; i++) shared_game_state->players[defender_id].units[i] = 0;
+        shared_game_state->players[attacker_id].points++;
+        shared_game_state->players[defender_id].game_over = (shared_game_state->players[attacker_id].points >= 5);
+        shared_game_state->players[attacker_id].game_over = (shared_game_state->players[attacker_id].points >= 5);
         
-        sprintf(shm->players[attacker_id].last_event, "Bitwa WYGRANA! +1 Pkt");
-        sprintf(shm->players[defender_id].last_event, "Bitwa PRZEGRANA! Straciles armie.");
+        sprintf(shared_game_state->players[attacker_id].last_event, "Bitwa WYGRANA! +1 Pkt");
+        sprintf(shared_game_state->players[defender_id].last_event, "Bitwa PRZEGRANA! Straciles armie.");
     } else {
         // Obrońca się broni
         for (int i = 0; i < 4; i++) {
-            int current = shm->players[defender_id].units[i];
-            int loss = (int)(current * SA / SB);
-            shm->players[defender_id].units[i] = (current > loss) ? current - loss : 0;
+            int current = shared_game_state->players[defender_id].units[i];
+            int loss = (int)(current * attack_strength / defense_strength);
+            shared_game_state->players[defender_id].units[i] = (current > loss) ? current - loss : 0;
         }
-        sprintf(shm->players[defender_id].last_event, "Obrona skuteczna! Poniesiono straty.");
-        sprintf(shm->players[attacker_id].last_event, "Atak odparty.");
+        sprintf(shared_game_state->players[defender_id].last_event, "Obrona skuteczna! Poniesiono straty.");
+        sprintf(shared_game_state->players[attacker_id].last_event, "Atak odparty.");
     }
-    shm->players[attacker_id].last_event_timer = 5;
-    shm->players[defender_id].last_event_timer = 5;
+    shared_game_state->players[attacker_id].last_event_timer = 5;
+    shared_game_state->players[defender_id].last_event_timer = 5;
 
     // Straty atakujacego (kontratak obrońcy)
-    float SA_defense = calculate_strength(att_units, UNIT_DEFENSE, 3);
-    if (SA_defense < 0.1) SA_defense = 0.1;
+    float attacker_defense = calculate_strength(attacking_units, UNIT_DEFENSE, 3);
+    if (attacker_defense < 0.1) attacker_defense = 0.1;
 
-    float loss_ratio = (SB_attack_power > SA_defense) ? 1.0 : (SB_attack_power / SA_defense);
+    float loss_ratio = (defender_attack_power > attacker_defense) ? 1.0 : (defender_attack_power / attacker_defense);
     
     for(int i=0; i<3; i++) {
-        int loss = (int)(att_units[i] * loss_ratio);
-        int surviving = att_units[i] - loss;
+        int loss = (int)(attacking_units[i] * loss_ratio);
+        int surviving = attacking_units[i] - loss;
         if (surviving < 0) surviving = 0;
-        shm->players[attacker_id].units[i] += surviving;
+        shared_game_state->players[attacker_id].units[i] += surviving;
     }
 
-    shm->players[defender_id].incoming_attack.active = 0;
+    shared_game_state->players[defender_id].incoming_attack.active = 0;
 
     // Warunek konca gry
-    if (shm->players[attacker_id].points >= 5) {
-        shm->game_active = 0;
-        shm->players[attacker_id].shutdown_timer = 5;
-        shm->players[defender_id].shutdown_timer = 5;
-        sprintf(shm->players[attacker_id].last_event, "GRATULACJE! Wygrales!");
-        sprintf(shm->players[defender_id].last_event, "PRZEGRALES.");
+    if (shared_game_state->players[attacker_id].points >= 5) {
+        shared_game_state->game_active = 0;
+        shared_game_state->players[attacker_id].shutdown_timer = 5;
+        shared_game_state->players[defender_id].shutdown_timer = 5;
+        sprintf(shared_game_state->players[attacker_id].last_event, "GRATULACJE! Wygrales!");
+        sprintf(shared_game_state->players[defender_id].last_event, "PRZEGRALES.");
     }
 }
 
 // Proces odpowiedzialny za całą logikę gry (surowce, produkcja, bitwy)
-void run_game_logic_process(int semid, GameSharedMemory *shm) {
+void run_game_logic_process(int semaphore_id, GameSharedMemory *shared_game_state) {
     while (1) {
-        sem_p(semid);
+        semaphore_lock(semaphore_id);
         
         // Obsługa zamykania gry (automatyczne wyłączenie po 5s)
-        if (shm->players[0].game_over && !shm->game_active) {
+        if (shared_game_state->players[0].game_over && !shared_game_state->game_active) {
             static int ticks = 0;
             if (++ticks >= 10) { // Co ok 1s
                 ticks = 0;
-                if (shm->players[0].shutdown_timer-- <= 0) {
-                    sem_v(semid);
+                if (shared_game_state->players[0].shutdown_timer-- <= 0) {
+                    semaphore_unlock(semaphore_id);
                     kill(getppid(), SIGTERM);
                     exit(0);
                 }
-                for(int i=1; i<MAX_PLAYERS; i++) shm->players[i].shutdown_timer = shm->players[0].shutdown_timer;
+                for(int i=1; i<MAX_PLAYERS; i++) shared_game_state->players[i].shutdown_timer = shared_game_state->players[0].shutdown_timer;
             }
-            sem_v(semid);
+            semaphore_unlock(semaphore_id);
             usleep(100000);
             continue;
         }
         
-        if (!shm->game_active) { sem_v(semid); sleep(1); continue; }
+        if (!shared_game_state->game_active) { semaphore_unlock(semaphore_id); sleep(1); continue; }
 
         for (int i = 0; i < MAX_PLAYERS; i++) {
-            if (shm->players[i].pid == 0) continue;
+            if (shared_game_state->players[i].pid == 0) continue;
 
             // Surowce: Worker * 5 + Baza(50)
-            shm->players[i].resources += 50 + (shm->players[i].units[UNIT_WORKER] * 5);
+            shared_game_state->players[i].resources += 50 + (shared_game_state->players[i].units[UNIT_WORKER] * 5);
 
             // Ataki
-            if(shm->players[i].incoming_attack.active) {
-                if(--shm->players[i].incoming_attack.time_left <= 0) resolve_combat(shm, i);
+            if(shared_game_state->players[i].incoming_attack.active) {
+                if(--shared_game_state->players[i].incoming_attack.time_left <= 0) resolve_combat(shared_game_state, i);
             }
 
             // Wiadomości - wygaszanie
-            if(shm->players[i].last_event_timer > 0) {
-                if(--shm->players[i].last_event_timer <= 0) shm->players[i].last_event[0] = '\0';
+            if(shared_game_state->players[i].last_event_timer > 0) {
+                if(--shared_game_state->players[i].last_event_timer <= 0) shared_game_state->players[i].last_event[0] = '\0';
             }
 
             // Produkcja
-            for (int q = 0; q < QUEUE_SIZE; q++) {
-                if (shm->players[i].production_queue[q].active) {
-                    if (--shm->players[i].production_queue[q].time_left <= 0) {
-                        int type = shm->players[i].production_queue[q].unit_type;
-                        shm->players[i].units[type]++;
-                        shm->players[i].production_queue[q].count--;
+            for (int queue_index = 0; queue_index < QUEUE_SIZE; queue_index++) {
+                if (shared_game_state->players[i].production_queue[queue_index].active) {
+                    if (--shared_game_state->players[i].production_queue[queue_index].time_left <= 0) {
+                        int type = shared_game_state->players[i].production_queue[queue_index].unit_type;
+                        shared_game_state->players[i].units[type]++;
+                        shared_game_state->players[i].production_queue[queue_index].count--;
                         
-                        if (shm->players[i].production_queue[q].count > 0) {
-                             shm->players[i].production_queue[q].time_left = UNIT_TIME[type];
+                        if (shared_game_state->players[i].production_queue[queue_index].count > 0) {
+                             shared_game_state->players[i].production_queue[queue_index].time_left = UNIT_TIME[type];
                         } else {
-                            shm->players[i].production_queue[q].active = 0;
+                            shared_game_state->players[i].production_queue[queue_index].active = 0;
                         }
                     }
                     break; // Kolejka FIFO - tylko pierwszy element
                 }
             }
         }
-        sem_v(semid);
+        semaphore_unlock(semaphore_id);
         sleep(1);
     }
 }
@@ -171,98 +160,99 @@ void run_game_logic_process(int semid, GameSharedMemory *shm) {
 // --- KOMUNIKACJA ---
 
 // Funkcja przetwarzająca akcje żądane przez klienta (Budowa/Atak)
-void handle_client_action(GameSharedMemory *shm, Message *msg) {
-    int p_id = msg->player_id;
-    if (p_id < 0 || p_id >= MAX_PLAYERS || shm->players[p_id].pid == 0) return;
+void handle_client_action(GameSharedMemory *shared_game_state, Message *message) {
+    int player_index = message->player_id;
+    if (player_index < 0 || player_index >= MAX_PLAYERS || shared_game_state->players[player_index].pid == 0) return;
 
-    if (msg->action_type == ACTION_BUILD) {
-        int type = msg->data[0];
-        int count = msg->data[1];
+    if (message->action_type == ACTION_BUILD) {
+        int type = message->data[0];
+        int count = message->data[1];
         int cost = UNIT_COST[type] * count;
 
-        if (type >= 0 && type <= 3 && count > 0 && shm->players[p_id].resources >= cost) {
-            for(int k=0; k<QUEUE_SIZE; k++) {
-                if(!shm->players[p_id].production_queue[k].active) {
-                    shm->players[p_id].production_queue[k].active = 1;
-                    shm->players[p_id].production_queue[k].unit_type = type;
-                    shm->players[p_id].production_queue[k].count = count;
-                    shm->players[p_id].production_queue[k].time_left = UNIT_TIME[type];
-                    shm->players[p_id].resources -= cost;
+        if (type >= 0 && type <= 3 && count > 0 && shared_game_state->players[player_index].resources >= cost) {
+            for(int queue_index = 0; queue_index < QUEUE_SIZE; queue_index++) {
+                if(!shared_game_state->players[player_index].production_queue[queue_index].active) {
+                    shared_game_state->players[player_index].production_queue[queue_index].active = 1;
+                    shared_game_state->players[player_index].production_queue[queue_index].unit_type = type;
+                    shared_game_state->players[player_index].production_queue[queue_index].count = count;
+                    shared_game_state->players[player_index].production_queue[queue_index].time_left = UNIT_TIME[type];
+                    shared_game_state->players[player_index].resources -= cost;
                     break;
                 }
             }
         }
     } 
-    else if (msg->action_type == ACTION_ATTACK) {
-        int u[3] = {msg->data[0], msg->data[1], msg->data[2]};
-        int def_id = (p_id == 0) ? 1 : 0;
+    else if (message->action_type == ACTION_ATTACK) {
+        int attack_units[3] = {message->data[0], message->data[1], message->data[2]};
+        int defender_id = (player_index == 0) ? 1 : 0;
         
         // Czy gracz ma tyle jednostek?
-        if (shm->players[p_id].units[0] >= u[0] && 
-            shm->players[p_id].units[1] >= u[1] &&
-            shm->players[p_id].units[2] >= u[2] &&
-            (u[0]+u[1]+u[2]) > 0 && 
-            !shm->players[def_id].incoming_attack.active) 
+        if (shared_game_state->players[player_index].units[0] >= attack_units[0] && 
+            shared_game_state->players[player_index].units[1] >= attack_units[1] &&
+            shared_game_state->players[player_index].units[2] >= attack_units[2] &&
+            (attack_units[0] + attack_units[1] + attack_units[2]) > 0 && 
+            !shared_game_state->players[defender_id].incoming_attack.active) 
         {
-            shm->players[def_id].incoming_attack.active = 1;
-            shm->players[def_id].incoming_attack.attacker_id = p_id;
-            shm->players[def_id].incoming_attack.defender_id = def_id;
-            shm->players[def_id].incoming_attack.time_left = 5;
-            memcpy(shm->players[def_id].incoming_attack.units, u, sizeof(u));
+            shared_game_state->players[defender_id].incoming_attack.active = 1;
+            shared_game_state->players[defender_id].incoming_attack.attacker_id = player_index;
+            shared_game_state->players[defender_id].incoming_attack.defender_id = defender_id;
+            shared_game_state->players[defender_id].incoming_attack.time_left = 5;
+            memcpy(shared_game_state->players[defender_id].incoming_attack.units, attack_units, sizeof(attack_units));
             
-            shm->players[p_id].units[0] -= u[0];
-            shm->players[p_id].units[1] -= u[1];
-            shm->players[p_id].units[2] -= u[2];
+            shared_game_state->players[player_index].units[0] -= attack_units[0];
+            shared_game_state->players[player_index].units[1] -= attack_units[1];
+            shared_game_state->players[player_index].units[2] -= attack_units[2];
 
-            sprintf(shm->players[p_id].last_event, "Atak wyslany (5s)");
-            shm->players[p_id].last_event_timer = 5;
-            sprintf(shm->players[def_id].last_event, "ALARM! Nadchodzi atak!");
-            shm->players[def_id].last_event_timer = 5;
+            sprintf(shared_game_state->players[player_index].last_event, "Atak wyslany (5s)");
+            shared_game_state->players[player_index].last_event_timer = 5;
+            sprintf(shared_game_state->players[defender_id].last_event, "ALARM! Nadchodzi atak!");
+            shared_game_state->players[defender_id].last_event_timer = 5;
         }
     }
 }
 
 // Proces odpowiedzialny za komunikację z klientami poprzez kolejkę komunikatów
-void run_communication_process(int msgid, int semid, GameSharedMemory *shm) {
-    Message msg;
-    int connected = 0;
+void run_communication_process(int message_queue_id, int semaphore_id, GameSharedMemory *shared_game_state) {
+    Message message;
+    size_t msg_size = sizeof(Message) - sizeof(long);
+    int connected_players_count = 0;
 
     while (1) {
         // 1. Odbiór wiadomości (z flagą IPC_NOWAIT aby nie blokować pętli)
-        if (msgrcv(msgid, &msg, sizeof(Message) - sizeof(long), -10, IPC_NOWAIT) != -1) {
-            sem_p(semid);
+        if (receive_message(message_queue_id, &message, msg_size, -10, IPC_NOWAIT) != -1) {
+            semaphore_lock(semaphore_id);
             
-            if (msg.mtype == MSG_LOGIN && connected < MAX_PLAYERS) {
-                shm->players[connected].pid = msg.player_id;
-                my_print("Gracz dolaczyl: "); my_print_int(connected); my_print("\n");
+            if (message.mtype == MSG_LOGIN && connected_players_count < MAX_PLAYERS) {
+                shared_game_state->players[connected_players_count].pid = message.player_id;
+                my_print("Gracz dolaczyl: "); my_print_int(connected_players_count); my_print("\n");
                 
                 // Odpowiedz
-                Message resp = {.mtype = msg.player_id, .player_id = connected};
-                msgsnd(msgid, &resp, sizeof(Message) - sizeof(long), 0);
+                Message response = {.mtype = message.player_id, .player_id = connected_players_count};
+                send_message(message_queue_id, &response, msg_size, 0);
                 
-                connected++;
-                if (connected == MAX_PLAYERS) {
-                    shm->game_active = 1;
+                connected_players_count++;
+                if (connected_players_count == MAX_PLAYERS) {
+                    shared_game_state->game_active = 1;
                     my_print("Start Gry!\n");
                 }
             }
-            else if (msg.mtype == MSG_ACTION && shm->game_active) {
-                handle_client_action(shm, &msg);
+            else if (message.mtype == MSG_ACTION && shared_game_state->game_active) {
+                handle_client_action(shared_game_state, &message);
             }
-            sem_v(semid);
+            semaphore_unlock(semaphore_id);
         }
 
         // 2. Wysyłanie stanu gry
-        sem_p(semid);
-        if (connected == MAX_PLAYERS) {
+        semaphore_lock(semaphore_id);
+        if (connected_players_count == MAX_PLAYERS) {
             for (int i = 0; i < MAX_PLAYERS; i++) {
-                if (shm->players[i].pid != 0) {
-                    Message update = {.mtype = MSG_STATE + i, .state_copy = shm->players[i]};
-                    msgsnd(msgid, &update, sizeof(Message) - sizeof(long), 0);
+                if (shared_game_state->players[i].pid != 0) {
+                    Message update = {.mtype = MSG_STATE + i, .state_copy = shared_game_state->players[i]};
+                    send_message(message_queue_id, &update, msg_size, 0);
                 }
             }
         }
-        sem_v(semid);
+        semaphore_unlock(semaphore_id);
         usleep(200000); // 200ms
     }
 }
@@ -271,28 +261,28 @@ int main() {
     my_print("Serwer Start...\n");
 
     // Czyszczenie starych zasobów IPC przed startem
-    msgctl(msgget(KEY_MSG, 0666), IPC_RMID, NULL);
-    shmctl(shmget(KEY_SHM, 0, 0666), IPC_RMID, NULL);
-    semctl(semget(KEY_SEM, 0, 0666), 0, IPC_RMID, NULL);
+    remove_message_queue(get_message_queue_id(KEY_MSG, 0666));
+    remove_shared_memory(get_shared_memory_id(KEY_SHM, 0, 0666));
+    remove_semaphore(get_semaphore_id(KEY_SEM, 0, 0666));
 
-    int msgid = msgget(KEY_MSG, IPC_CREAT | 0666);
-    int shmid = shmget(KEY_SHM, sizeof(GameSharedMemory), IPC_CREAT | 0666);
-    int semid = semget(KEY_SEM, 1, IPC_CREAT | 0666);
+    int message_queue_id = get_message_queue_id(KEY_MSG, IPC_CREAT | 0666);
+    int shared_memory_id = get_shared_memory_id(KEY_SHM, sizeof(GameSharedMemory), IPC_CREAT | 0666);
+    int semaphore_id = get_semaphore_id(KEY_SEM, 1, IPC_CREAT | 0666);
     
-    if (msgid == -1 || shmid == -1 || semid == -1) { perror("IPC Error"); exit(1); }
-
     // Inicjalizacja pamięci współdzielonej i semafora
-    GameSharedMemory *shm = (GameSharedMemory *)shmat(shmid, NULL, 0);
-    semctl(semid, 0, SETVAL, 1);
-    memset(shm, 0, sizeof(GameSharedMemory));
-    shm->players[0].resources = 300;
-    shm->players[1].resources = 300;
+    GameSharedMemory *shared_game_state = (GameSharedMemory *)attach_shared_memory(shared_memory_id, 0);
+    initialize_semaphore(semaphore_id, 0, 1);
+    
+    // Inicjalizacja danych gry
+    memset(shared_game_state, 0, sizeof(GameSharedMemory));
+    shared_game_state->players[0].resources = 300;
+    shared_game_state->players[1].resources = 300;
 
     // Rozwidlenie procesów
     if (fork() == 0) {
-        run_game_logic_process(semid, shm);
+        run_game_logic_process(semaphore_id, shared_game_state);
     } else {
-        run_communication_process(msgid, semid, shm);
+        run_communication_process(message_queue_id, semaphore_id, shared_game_state);
     }
     return 0;
 }
