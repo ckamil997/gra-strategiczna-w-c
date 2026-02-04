@@ -18,7 +18,21 @@
 
 // Stałe gry 
 #define MAX_PLAYERS 2
-#define QUEUE_SIZE 10   // Rozmiar kolejki produkcji dla każdego gracza
+#define QUEUE_SIZE 10
+#define POINTS_TO_WIN 5
+#define START_RESOURCES 300
+#define BASE_INCOME 50
+#define WORKER_INCOME 5
+#define ATTACK_TRAVEL_TIME 5
+
+// Statystyki jednostek
+static const int UNIT_COST[]      = {100, 250, 550, 150};
+static const float UNIT_ATTACK[]  = {1.0f, 1.5f, 3.5f, 0.0f};
+static const float UNIT_DEFENSE[] = {1.2f, 3.0f, 1.2f, 0.0f};
+static const int UNIT_TIME[]      = {2, 3, 5, 2};
+
+// Makro pomocnicze
+#define my_print(s) write(1, (s), strlen(s))
 
 // Typy jednostek
 #define UNIT_LIGHT 0
@@ -42,7 +56,7 @@ typedef struct {
 } ProductionTask;
 
 typedef struct {
-    int active, attacker_id, defender_id, units[3], time_left;
+    int active, attacker_id, units[3], time_left;
 } AttackTask;
 
 // Stan gracza (przesyłany do klienta do wyświetlenia) 
@@ -61,53 +75,12 @@ typedef struct {
 
 typedef struct {
     long mtype;
-    int player_id, action_type, data[5];
-    PlayerState state_copy;
+    int player_id, action_type, data[3];
+    PlayerState state_copy; 
 } Message;
 
-// --- FUNKCJE IPC ---
-
-// Helper do sprawdzania błędów przy pobieraniu ID (dla shm, msg, sem)
-static inline int sys_check(int res, int flags, const char *msg) {
-    if (res == -1 && (flags & IPC_CREAT)) { perror(msg); exit(1); }
-    return res;
-}
-
-// 1. Kolejki
-static inline int get_message_queue_id(key_t k, int f) { return sys_check(msgget(k, f), f, "msgget"); }
-static inline void remove_message_queue(int id) { msgctl(id, IPC_RMID, NULL); }
-
-static inline void send_message(int id, void *msg, size_t sz, int f) {
-    if (msgsnd(id, msg, sz, f) == -1 && !(f & IPC_NOWAIT)) perror("msgsnd");
-}
-
-static inline int receive_message(int id, void *msg, size_t sz, long type, int f) {
-    return msgrcv(id, msg, sz, type, f);
-}
-
-// 2. Pamięć
-static inline int get_shared_memory_id(key_t k, size_t s, int f) { return sys_check(shmget(k, s, f), f, "shmget"); }
-static inline void remove_shared_memory(int id) { shmctl(id, IPC_RMID, NULL); }
-
-static inline void *attach_shared_memory(int id, int f) {
-    void *ptr = shmat(id, NULL, f);
-    if (ptr == (void *)-1) { perror("shmat"); exit(1); }
-    return ptr;
-}
-static inline void detach_shared_memory(const void *addr) { shmdt(addr); }
-
-// 3. Semafory
-static inline int get_semaphore_id(key_t k, int n, int f) { return sys_check(semget(k, n, f), f, "semget"); }
-static inline void remove_semaphore(int id) { semctl(id, 0, IPC_RMID, NULL); }
-static inline void initialize_semaphore(int id, int num, int val) { semctl(id, num, SETVAL, val); }
-
-static inline void semaphore_op(int id, int op) {
-    struct sembuf b = {0, op, 0};
-    if (semop(id, &b, 1) == -1) perror("semop");
-}
-
-// Makra dla czytelności
-#define semaphore_lock(id) semaphore_op(id, -1)
-#define semaphore_unlock(id) semaphore_op(id, 1)
+// Makra do obsługi semaforów
+#define sem_lock(id) semop(id, &(struct sembuf){0, -1, 0}, 1)
+#define sem_unlock(id) semop(id, &(struct sembuf){0, 1, 0}, 1)
 
 #endif
